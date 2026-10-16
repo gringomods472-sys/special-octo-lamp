@@ -1,0 +1,88 @@
+name: RDP
+
+on:
+  workflow_dispatch:
+
+jobs:
+  secure-rdp:
+    runs-on: windows-latest
+    timeout-minutes: 5760 # 4 dias de execução
+
+    steps:
+      - name: Free Up Disk Space
+        run: |
+          Remove-Item -Path "C:\Program Files\Microsoft Visual Studio" -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item -Path "C:\Android" -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item -Path "C:\Program Files\dotnet" -Recurse -Force -ErrorAction SilentlyContinue
+          Write-Host "Espaço otimizado com sucesso!"
+
+      - name: Configure Core RDP Settings & Performance
+        run: |
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
+
+          New-Item -Path "HKCU:\Software\Microsoft\Terminal Server Client" -Force | Out-Null
+          Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Terminal Server Client' -Name "BitmapCacheSize" -Value 30000 -Force
+
+          netsh advfirewall firewall delete rule name="RDP-Tailscale"
+          netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389
+
+          Restart-Service -Name TermService -Force
+
+      - name: Create RDP User (3283 XP)
+        run: |
+          $username = "Skyro"
+          $password = "SkyroPass@3283!"
+          
+          # Remove se já existir para evitar conflito
+          if (Get-LocalUser -Name $username -ErrorAction SilentlyContinue) {
+              Remove-LocalUser -Name $username
+          }
+
+          $securePass = ConvertTo-SecureString$password -AsPlainText -Force
+          New-LocalUser -Name $username -Password$securePass -FullName "Skyro RDP" -Description "Virtual PC User"
+          Add-LocalGroupMember -Group "Administrators" -Member $username
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $username
+
+          Write-Host "Usuário $username criado com sucesso!"
+          echo "RDP_PASS=$password" >> $env:GITHUB_ENV
+
+      - name: Install Tailscale
+        run: |
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-amd64.msi"
+          $installerPath = "$env:TEMP\tailscale.msi"
+          
+          Invoke-WebRequest -Uri $tsUrl -OutFile$installerPath
+          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
+          Remove-Item $installerPath -Force
+
+      - name: Establish Tailscale Connection
+        run: |
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=rdp-3283-xp-$env:GITHUB_RUN_ID$tsIP = $null$retries = 0
+          while (-not $tsIP -and$retries -lt 15) {
+              $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+              Start-Sleep -Seconds 5
+              $retries++
+          }
+          
+          if (-not $tsIP) {
+              Write-Error "Falha ao obter o IP do Tailscale."
+              exit 1
+          }
+          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+
+      - name: Maintain Connection & Show Credentials (3283 XP)
+        run: |
+          Write-Host "`n=========================================="
+          Write-Host "🖥️ RDP SYSTEM: 3283 XP ATIVADO (4 DIAS)"
+          Write-Host "=========================================="
+          Write-Host "Address  : $env:TAILSCALE_IP"
+          Write-Host "Username : Skyro"
+          Write-Host "Password : $env:RDP_PASS"
+          Write-Host "==========================================`n"
+          
+          while ($true) {
+              Write-Host "[$(Get-Date)] RDP 3283 XP Online..."
+              Start-Sleep -Seconds 300
+          }
